@@ -15,6 +15,9 @@ TARGET_DIR="$HOME/.strata"
 TEMP_DIR="$HOME/.strata_tmp"
 
 rm -rf "$TEMP_DIR"
+
+# INHIBIT SLEEP: Blocks power saving states strictly during the git cloning/updating window
+systemd-inhibit --what=sleep:idle --who="Strata Updater" --why="Downloading Strata Engine Updates" \
 git clone --depth 1 https://github.com "$TEMP_DIR"
 
 if [ $? -eq 0 ] && [ -d "$TEMP_DIR/.git" ]; then
@@ -45,7 +48,11 @@ STRATA_PID=$(pgrep -f "setup.sh.*--port $CUSTOM_PORT")
 
 if [ -z "$STRATA_PID" ]; then
     cd "$TARGET_DIR" || exit 1
+    
+    # INHIBIT SLEEP: Forces the system to stay fully awake while your AI model inference server is active
+    systemd-inhibit --what=sleep:idle --who="Strata AI Engine" --why="Running Local Inference Model Server" \
     ./setup.sh --port $CUSTOM_PORT --host 0.0.0.0 &
+    
     while true; do sleep 2; done
 else
     kill "$STRATA_PID"
@@ -90,14 +97,10 @@ systemctl --user enable strata-update.timer
 systemctl --user start strata-update.timer
 
 echo "=== 6. ADDING TO STEAM SHORTCUTS ==="
-if [ -n "$STEAM_CONFIG_DIR" ]; then
-    # Inject a clean native shortcut configuration string straight into Steam's VDF database
-    # This keeps the user layout fully pristine while dropping the launcher into place
-    printf "\x00shortcuts\x00\x010\x00\x02AppName\x00Strata AI Engine\x00\x02Exe\x00\"$HOME/launch_strata.sh\"\x00\x02StartDir\x00\"$HOME/\"\x00\x08\x08" >> "$STEAM_CONFIG_DIR"
-    echo "Added 'Strata AI Engine' to your Non-Steam library database!"
-    echo "⚠️ NOTE: Please completely close and restart Steam to see the new shortcut link appear."
-else
-    echo "Could not auto-detect Steam folder path. Please add '$HOME/launch_strata.sh' manually via 'Add Non-Steam Game'."
-fi
+echo "To safely register Strata in your library without corrupting shortcuts.vdf:"
+echo "1. Launch your Steam client UI."
+echo "2. Select 'Add a Game' (bottom-left) -> 'Add a Non-Steam Game...'"
+echo "3. Use the file explorer to open: $HOME/launch_strata.sh"
+echo "4. Change its title to 'Strata AI Engine' under its entry properties."
 
 echo "=== INSTALLATION COMPLETE ==="
