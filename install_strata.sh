@@ -4,6 +4,7 @@
 TARGET_DIR="$HOME/.strata"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 LOCAL_BIN="$HOME/.local/bin"
+GIT_BUILD_DIR="$HOME/.local/share/git-build"
 GCC_BUILD_DIR="$HOME/.local/share/gcc-build"
 
 echo "=== 1. CREATING ISOLATED COMPILER WORKSPACES ==="
