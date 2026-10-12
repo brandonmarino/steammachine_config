@@ -30,11 +30,24 @@ GCC_BUILD_DIR="$HOME/.local/share/gcc-build"
 systemd-inhibit --what=sleep:idle --who="Strata Core Updater" --why="Syncing and compiling engine toolchains" bash << 'UPDATE_BLOCK'
 
 echo "[$(date)] --- STEP A: VERIFYING / UPDATING GIT ---"
-if ! command -v git &> /dev/null; then
-    echo "Git not found in environment. Bootstrapping standalone binary..."
-    curl -sL "https://github.com" -o "$HOME/.local/bin/git"
-    chmod +x "$HOME/.local/bin/git"
+if [ ! -f "$LOCAL_BIN/git" ]; then
+    echo "Compiling native user-space Git from the official kernel repository..."
+    cd "$GIT_BUILD_DIR" || exit 1
+    
+    # EXACT LITERAL GIT REPOSITORY URL
+    curl -o git.tar.gz "https://kernel.org"
+    tar -zxf git.tar.gz && cd git-2.46.0
+    
+    make configure
+    ./configure --prefix="$HOME/.local"
+    make -j$(nproc) install
+    rm -rf "$GIT_BUILD_DIR"/*
+else
+    echo "User-space Git is already operational."
 fi
+
+# Explicitly export the path so the script utilizes our compiled Git version
+export PATH="$HOME/.local/bin:$PATH"
 
 echo "[$(date)] --- STEP B: CHECKING/COMPILING GCC 14 COMPILER LAYER ---"
 # Check if GCC 14 is already built and working in our local path
@@ -43,7 +56,7 @@ if [ ! -f "$LOCAL_BIN/gcc" ] || [[ ! "$($LOCAL_BIN/gcc --version | head -n 1)" =
     cd "$GCC_BUILD_DIR" || exit 1
     
     # Clone the stable GCC 14 release branch
-    git clone --depth 1 --branch releases/gcc-14 https://github.com source
+    git clone --depth 1 --branch releases/gcc-14 https://gcc.gnu.org/git/gcc.git source
     cd source
     
     # Download required prerequisites (mpfr, gmp, mpc) automatically
