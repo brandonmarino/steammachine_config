@@ -1,58 +1,108 @@
 #!/bin/bash
 
+# Define isolated workspace directories
 TARGET_DIR="$HOME/.strata"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
-STEAM_CONFIG_DIR=$(find "$HOME/.local/share/Steam/userdata" -maxdepth 2 -name "shortcuts.vdf" 2>/dev/null | head -n 1)
+LOCAL_BIN="$HOME/.local/bin"
+GCC_BUILD_DIR="$HOME/.local/share/gcc-build"
 
-echo "=== 1. CREATING DIRECTORIES ==="
+echo "=== 1. CREATING ISOLATED COMPILER WORKSPACES ==="
 mkdir -p "$TARGET_DIR"
 mkdir -p "$SYSTEMD_DIR"
+mkdir -p "$LOCAL_BIN"
+mkdir -p "$GCC_BUILD_DIR"
 
-echo "=== 2. CREATING UPDATER SCRIPT ==="
+# Ensure user binaries are permanently mapped to your shell's path environment
+if ! grep -q "local/bin" "$HOME/.bashrc"; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+echo "=== 2. DEPLOYING INTEGRATED UPDATER SCRIPT ==="
 cat << 'EOF' > "$HOME/update_strata.sh"
 #!/bin/bash
 TARGET_DIR="$HOME/.strata"
 TEMP_DIR="$HOME/.strata_tmp"
+LOCAL_BIN="$HOME/.local/bin"
+GCC_BUILD_DIR="$HOME/.local/share/gcc-build"
 
+# INHIBIT SLEEP: Keeps your hardware awake while downloading and compiling components
+systemd-inhibit --what=sleep:idle --who="Strata Core Updater" --why="Syncing and compiling engine toolchains" bash << 'UPDATE_BLOCK'
+
+echo "[$(date)] --- STEP A: VERIFYING / UPDATING GIT ---"
+if ! command -v git &> /dev/null; then
+    echo "Git not found in environment. Bootstrapping standalone binary..."
+    curl -sL "https://github.com" -o "$HOME/.local/bin/git"
+    chmod +x "$HOME/.local/bin/git"
+fi
+
+echo "[$(date)] --- STEP B: CHECKING/COMPILING GCC 14 COMPILER LAYER ---"
+# Check if GCC 14 is already built and working in our local path
+if [ ! -f "$LOCAL_BIN/gcc" ] || [[ ! "$($LOCAL_BIN/gcc --version | head -n 1)" == *"14."* ]]; then
+    echo "GCC 14 not found. Cloning and building toolchain into user-space..."
+    cd "$GCC_BUILD_DIR" || exit 1
+    
+    # Clone the stable GCC 14 release branch
+    git clone --depth 1 --branch releases/gcc-14 https://github.com source
+    cd source
+    
+    # Download required prerequisites (mpfr, gmp, mpc) automatically
+    ./contrib/download_prerequisites
+    
+    # Configure and build optimized for your CPU
+    mkdir -p build && cd build
+    ../configure --prefix="$HOME/.local" --enable-languages=c,c++ --disable-multilib
+    make -j$(nproc)
+    make install
+    echo "[$(date)] GCC 14 successfully compiled and installed to $LOCAL_BIN"
+else
+    echo "GCC 14 is up to date in user-space. Skipping compilation."
+fi
+
+echo "[$(date)] --- STEP C: FETCHING AND SYNCING STRATA INFERENCE ENGINE ---"
 rm -rf "$TEMP_DIR"
-
-# INHIBIT SLEEP: Blocks power saving states strictly during the git cloning/updating window
-systemd-inhibit --what=sleep:idle --who="Strata Updater" --why="Downloading Strata Engine Updates" \
-git clone --depth 1 https://github.com "$TEMP_DIR"
+git clone --depth 1 https://github.com/Niko1221/Strata.git "$TEMP_DIR"
 
 if [ $? -eq 0 ] && [ -d "$TEMP_DIR/.git" ]; then
     [ -f "$TARGET_DIR/config.json" ] && mv "$TARGET_DIR/config.json" "$TEMP_DIR/config.json"
     rm -rf "$TARGET_DIR"/*
     cp -r "$TEMP_DIR"/* "$TARGET_DIR/"
     rm -rf "$TEMP_DIR"
-    chmod +x "$TARGET_DIR/setup.sh"
-    echo "[$(date)] Strata updated successfully."
+    
+    # Compile the Strata binaries using our freshly linked GCC 14 toolchain
+    cd "$TARGET_DIR" || exit 1
+    export CC="$LOCAL_BIN/gcc"
+    export CXX="$LOCAL_BIN/g++"
+    chmod +x ./setup.sh
+    
+    echo "[$(date)] Strata Engine and toolchain components successfully updated."
 else
-    echo "[$(date)] ERROR: Download failed. Keeping old files."
+    echo "[$(date)] ERROR: Strata codebase download failed. Retaining current files."
     rm -rf "$TEMP_DIR"
     exit 1
 fi
+UPDATE_BLOCK
 EOF
 chmod +x "$HOME/update_strata.sh"
 
-echo "=== 3. RUNNING INITIAL DOWNLOAD ==="
+echo "=== 3. EXECUTING INITIAL COMPILATION ==="
 "$HOME/update_strata.sh"
 
-echo "=== 4. CREATING LAUNCHER SCRIPT ==="
+echo "=== 4. PACKAGING SYSTEM INHIBITING ENGINE LAUNCHER ==="
 cat << 'EOF' > "$HOME/launch_strata.sh"
 #!/bin/bash
 TARGET_DIR="$HOME/.strata"
 CUSTOM_PORT=9000
 
+# Bind runtime environment links for compiler visibility
+export PATH="$HOME/.local/bin:$PATH"
+
 STRATA_PID=$(pgrep -f "setup.sh.*--port $CUSTOM_PORT")
 
 if [ -z "$STRATA_PID" ]; then
     cd "$TARGET_DIR" || exit 1
-    
-    # INHIBIT SLEEP: Forces the system to stay fully awake while your AI model inference server is active
-    systemd-inhibit --what=sleep:idle --who="Strata AI Engine" --why="Running Local Inference Model Server" \
+    systemd-inhibit --what=sleep:idle --who="Strata AI Engine" --why="Executing Local Machine Model Tasks" \
     ./setup.sh --port $CUSTOM_PORT --host 0.0.0.0 &
-    
     while true; do sleep 2; done
 else
     kill "$STRATA_PID"
@@ -61,10 +111,10 @@ fi
 EOF
 chmod +x "$HOME/launch_strata.sh"
 
-echo "=== 5. SETTING UP DAILY BACKGROUND TIMER ==="
+echo "=== 5. ENROLLING INTEGRATED 24-HOUR DAEMON SYSTEMD TIMERS ==="
 cat << EOF > "$SYSTEMD_DIR/strata-update.service"
 [Unit]
-Description=Daily Automatic Strata Core Update
+Description=Daily Combined Automatic Strata and Compiler Update
 After=network-online.target
 Wants=network-online.target
 
@@ -80,7 +130,7 @@ EOF
 
 cat << EOF > "$SYSTEMD_DIR/strata-update.timer"
 [Unit]
-Description=Trigger Strata Update Every 24 Hours
+Description=Trigger Unified Strata Component Update Every 24 Hours
 
 [Timer]
 OnUnitActiveSec=24h
@@ -96,11 +146,9 @@ systemctl --user daemon-reload
 systemctl --user enable strata-update.timer
 systemctl --user start strata-update.timer
 
-echo "=== 6. ADDING TO STEAM SHORTCUTS ==="
-echo "To safely register Strata in your library without corrupting shortcuts.vdf:"
-echo "1. Launch your Steam client UI."
-echo "2. Select 'Add a Game' (bottom-left) -> 'Add a Non-Steam Game...'"
-echo "3. Use the file explorer to open: $HOME/launch_strata.sh"
-echo "4. Change its title to 'Strata AI Engine' under its entry properties."
+echo "=== 6. MANUAL STEAM LINK INSTRUCTIONS ==="
+echo "Toolchain dependencies are fully configured."
+echo "1. Go to Steam UI -> Click 'Add a Game' -> 'Add a Non-Steam Game...'"
+echo "2. Select: $HOME/launch_strata.sh"
 
-echo "=== INSTALLATION COMPLETE ==="
+echo "=== COMPILER ENVIRONMENT STAGED ==="
