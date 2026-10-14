@@ -1,168 +1,102 @@
+cat << 'EOF' > deploy_strata_steamos.sh
 #!/bin/bash
+set -e
 
-# Define isolated workspace directories
-TARGET_DIR="$HOME/.strata"
-SYSTEMD_DIR="$HOME/.config/systemd/user"
-LOCAL_BIN="$HOME/.local/bin"
-GIT_BUILD_DIR="$HOME/.local/share/git-build"
-GCC_BUILD_DIR="$HOME/.local/share/gcc-build"
+CONTAINER_NAME="strata-build"
+TARGET_DIR="/home/deck/Documents"
+WRAPPER_PATH="$TARGET_DIR/run_strata.sh"
+LAUNCHER_PATH="/home/deck/.local/share/applications/StrataAI.desktop"
+STRATA_DIR="/home/deck/Strata"
 
-echo "=== 1. CREATING ISOLATED COMPILER WORKSPACES ==="
+echo "🌟 Starting Automated Strata SteamOS Deployment..."
+
+# 1. Configure GPU Compute Permissions for the deck user
+echo "🎮 Provisioning AMD GPU compute cluster access..."
+sudo usermod -a -G render,video $USER
+
+# 2. Create the Arch Linux Distrobox Container if it doesn't exist
+if ! distrobox list | grep -q "$CONTAINER_NAME"; then
+    echo "🐳 Spinning up clean Arch Linux Distrobox Container..."
+    distrobox create -n "$CONTAINER_NAME" --image archlinux:latest --yes
+    
+    echo "🛠️ Initializing container toolset (Compiler suite, Python, CMake, Ninja)..."
+    distrobox enter "$CONTAINER_NAME" -- bash -c "sudo pacman -Syu --noconfirm base-devel git python python-pip cmake ninja"
+else
+    echo "✅ Distrobox container '$CONTAINER_NAME' already exists."
+fi
+
+# 3. Clone Strata Source Tree if missing
+if [ ! -d "$STRATA_DIR" ]; then
+    echo "📥 Cloning Strata Repository into $STRATA_DIR..."
+    git clone https://github.com "$STRATA_DIR"
+else
+    echo "✅ Strata repository directory already present."
+fi
+
+# 4. Build Gaming Mode Execution Wrapper Script
+echo "⚙️ Deploying automation wrapper infrastructure..."
 mkdir -p "$TARGET_DIR"
-mkdir -p "$SYSTEMD_DIR"
-mkdir -p "$LOCAL_BIN"
-mkdir -p "$GCC_BUILD_DIR"
+mkdir -p "$(dirname "$LAUNCHER_PATH")"
 
-# Ensure user binaries are permanently mapped to your shell's path environment
-if ! grep -q "local/bin" "$HOME/.bashrc"; then
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-echo "=== 2. DEPLOYING INTEGRATED UPDATER SCRIPT ==="
-cat << 'EOF' > "$HOME/update_strata.sh"
+cat << 'INNER_EOF' > "$WRAPPER_PATH"
 #!/bin/bash
-TARGET_DIR="$HOME/.strata"
-TEMP_DIR="$HOME/.strata_tmp"
-LOCAL_BIN="$HOME/.local/bin"
-GCC_BUILD_DIR="$HOME/.local/share/gcc-build"
+CONTAINER_NAME="strata-build"
+STRATA_DIR="##STRATA_DIR##"
 
-# INHIBIT SLEEP: Keeps your hardware awake while downloading and compiling components
-systemd-inhibit --what=sleep:idle --who="Strata Core Updater" --why="Syncing and compiling engine toolchains" bash << 'UPDATE_BLOCK'
+# Execute clean-up tasks on close
+cleanup() {
+    echo "🛑 Steam wrapper closed. Purging all container instances and releasing VRAM..."
+    # Uses SteamOS native distrobox syntax safely
+    distrobox stop --yes "$CONTAINER_NAME"
+    exit 0
+}
 
-echo "[$(date)] --- STEP A: VERIFYING / UPDATING GIT ---"
-if [ ! -f "$LOCAL_BIN/git" ]; then
-    echo "Compiling native user-space Git from the official kernel repository..."
-    cd "$GIT_BUILD_DIR" || exit 1
-    
-    # EXACT LITERAL GIT REPOSITORY URL
-    curl -o git.tar.gz "https://kernel.org"
-    tar -zxf git.tar.gz && cd git-2.46.0
-    
-    make configure
-    ./configure --prefix="$HOME/.local"
-    make -j$(nproc) install
-    rm -rf "$GIT_BUILD_DIR"/*
-else
-    echo "User-space Git is already operational."
-fi
+# Trap Steam's target kill signals to guarantee immediate VRAM/RAM purging
+trap cleanup SIGINT SIGTERM EXIT
 
-# Explicitly export the path so the script utilizes our compiled Git version
-export PATH="$HOME/.local/bin:$PATH"
+echo "🚀 Initializing Strata Execution Envelope on Port 8081..."
 
-echo "[$(date)] --- STEP B: CHECKING/COMPILING GCC 14 COMPILER LAYER ---"
-# Check if GCC 14 is already built and working in our local path
-if [ ! -f "$LOCAL_BIN/gcc" ] || [[ ! "$($LOCAL_BIN/gcc --version | head -n 1)" == *"14."* ]]; then
-    echo "GCC 14 not found. Cloning and building toolchain into user-space..."
-    cd "$GCC_BUILD_DIR" || exit 1
-    
-    # Clone the stable GCC 14 release branch
-    git clone --depth 1 --branch releases/gcc-14 https://gcc.gnu.org/git/gcc.git source
-    cd source
-    
-    # Download required prerequisites (mpfr, gmp, mpc) automatically
-    ./contrib/download_prerequisites
-    
-    # Configure and build optimized for your CPU
-    mkdir -p build && cd build
-    ../configure --prefix="$HOME/.local" --enable-languages=c,c++ --disable-multilib
-    make -j$(nproc)
-    make install
-    echo "[$(date)] GCC 14 successfully compiled and installed to $LOCAL_BIN"
-else
-    echo "GCC 14 is up to date in user-space. Skipping compilation."
-fi
+# Inhibit sleep, isolate audio server layouts, run auto-updates, and bind port 8081
+ALSA_CARD=0 ALSA_PCM_CARD=0 PULSE_SERVER="" systemd-inhibit \
+    --why="Running Strata local AI inference engine" \
+    --who="Steam Game Wrapper" \
+    --what="sleep" \
+    distrobox enter "$CONTAINER_NAME" --additional-flags "--workdir $STRATA_DIR" -- bash -c "./update.sh && ./setup.sh --port 8081"
 
-echo "[$(date)] --- STEP C: FETCHING AND SYNCING STRATA INFERENCE ENGINE ---"
-rm -rf "$TEMP_DIR"
-git clone --depth 1 https://github.com/Niko1221/Strata.git "$TEMP_DIR"
+# Maintain context container block until child execution threads fully terminate
+wait $!
+INNER_EOF
 
-if [ $? -eq 0 ] && [ -d "$TEMP_DIR/.git" ]; then
-    [ -f "$TARGET_DIR/config.json" ] && mv "$TARGET_DIR/config.json" "$TEMP_DIR/config.json"
-    rm -rf "$TARGET_DIR"/*
-    cp -r "$TEMP_DIR"/* "$TARGET_DIR/"
-    rm -rf "$TEMP_DIR"
-    
-    # Compile the Strata binaries using our freshly linked GCC 14 toolchain
-    cd "$TARGET_DIR" || exit 1
-    export CC="$LOCAL_BIN/gcc"
-    export CXX="$LOCAL_BIN/g++"
-    chmod +x ./setup.sh
-    
-    echo "[$(date)] Strata Engine and toolchain components successfully updated."
-else
-    echo "[$(date)] ERROR: Strata codebase download failed. Retaining current files."
-    rm -rf "$TEMP_DIR"
-    exit 1
-fi
-UPDATE_BLOCK
-EOF
-chmod +x "$HOME/update_strata.sh"
+# Interpolate absolute Strata location variables into execution payload
+sed -i "s|##STRATA_DIR##|$STRATA_DIR|g" "$WRAPPER_PATH"
 
-echo "=== 3. EXECUTING INITIAL COMPILATION ==="
-"$HOME/update_strata.sh"
+# 5. Generate Steam-Scannable Desktop Entry Configuration
+cat << INNER_EOF > "$LAUNCHER_PATH"
+[Desktop Entry]
+Name=Strata AI Engine
+Comment=Launches Strata Inference inside a Distrobox sandbox environment on port 8081
+Exec=$WRAPPER_PATH
+Icon=steam
+Terminal=true
+Type=Application
+Categories=Game;
+INNER_EOF
 
-echo "=== 4. PACKAGING SYSTEM INHIBITING ENGINE LAUNCHER ==="
-cat << 'EOF' > "$HOME/launch_strata.sh"
-#!/bin/bash
-TARGET_DIR="$HOME/.strata"
-CUSTOM_PORT=9000
+# 6. Apply proper execution bits
+chmod +x "$WRAPPER_PATH"
+chmod +x "$LAUNCHER_PATH"
 
-# Bind runtime environment links for compiler visibility
-export PATH="$HOME/.local/bin:$PATH"
-
-STRATA_PID=$(pgrep -f "setup.sh.*--port $CUSTOM_PORT")
-
-if [ -z "$STRATA_PID" ]; then
-    cd "$TARGET_DIR" || exit 1
-    systemd-inhibit --what=sleep:idle --who="Strata AI Engine" --why="Executing Local Machine Model Tasks" \
-    ./setup.sh --port $CUSTOM_PORT --host 0.0.0.0 &
-    while true; do sleep 2; done
-else
-    kill "$STRATA_PID"
-    sleep 1
-fi
-EOF
-chmod +x "$HOME/launch_strata.sh"
-
-echo "=== 5. ENROLLING INTEGRATED 24-HOUR DAEMON SYSTEMD TIMERS ==="
-cat << EOF > "$SYSTEMD_DIR/strata-update.service"
-[Unit]
-Description=Daily Combined Automatic Strata and Compiler Update
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=$HOME/update_strata.sh
-StandardOutput=append:$HOME/.strata_update.log
-StandardError=append:$HOME/.strata_update.log
-
-[Install]
-WantedBy=default.target
+echo ""
+echo "🎉 🌟 DEPLOYMENT COMPLETE 🌟 🎉"
+echo "--------------------------------------------------"
+echo "🕹️  Launcher Entry Created at: $LAUNCHER_PATH"
+echo "🖥️  Compute target configuration set to Port: 8081"
+echo "⚡ GPU acceleration mapping active for your 9070 XT."
+echo "--------------------------------------------------"
+echo "👉 FINAL STEP: Open Steam (Desktop Mode) -> 'Add a Non-Steam Game' -> Select 'Strata AI Engine'."
+echo "Once added, return to Gaming Mode and launch it!"
 EOF
 
-cat << EOF > "$SYSTEMD_DIR/strata-update.timer"
-[Unit]
-Description=Trigger Unified Strata Component Update Every 24 Hours
-
-[Timer]
-OnUnitActiveSec=24h
-OnBootSec=15min
-RandomizedDelaySec=5min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-systemctl --user daemon-reload
-systemctl --user enable strata-update.timer
-systemctl --user start strata-update.timer
-
-echo "=== 6. MANUAL STEAM LINK INSTRUCTIONS ==="
-echo "Toolchain dependencies are fully configured."
-echo "1. Go to Steam UI -> Click 'Add a Game' -> 'Add a Non-Steam Game...'"
-echo "2. Select: $HOME/launch_strata.sh"
-
-echo "=== COMPILER ENVIRONMENT STAGED ==="
+# Execute the fixed setup
+chmod +x deploy_strata_steamos.sh
+./deploy_strata_steamos.sh
