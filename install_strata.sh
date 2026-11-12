@@ -28,7 +28,7 @@ fi
 # 3. Clone Strata Source Tree if missing
 if [ ! -d "$STRATA_DIR" ]; then
     echo "📥 Cloning Strata Repository into $STRATA_DIR..."
-    git clone https://github.com "$STRATA_DIR"
+    git clone https://github.com/Niko1221/Strata.git "$STRATA_DIR"
 else
     echo "✅ Strata repository directory already present."
 fi
